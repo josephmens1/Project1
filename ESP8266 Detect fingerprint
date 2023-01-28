@@ -1,0 +1,250 @@
+#include <ESP8266WiFi.h>
+
+const char* ssid     = "JM\360\237\215\200";
+const char* password = "joemensah";
+
+const char* host = "172.20.10.2";
+
+const int httpPort = 80;
+const char* resource = "api.php"; //DEVICE ID - example 605db108af408600066050ae
+
+
+
+#include <Adafruit_Fingerprint.h>
+
+
+#if (defined(__AVR__) || defined(ESP8266)) && !defined(__AVR_ATmega2560__)
+// For UNO and others without hardware serial, we must use software serial...
+// pin #2 is IN from sensor (GREEN wire)
+// pin #3 is OUT from arduino  (WHITE wire)
+// Set up the serial port to use softwareserial..
+SoftwareSerial mySerial(D6, D5);
+
+#else
+// On Leonardo/M0/etc, others with hardware serial, use hardware serial!
+// #0 is green wire, #1 is white
+#define mySerial Serial1
+
+#endif
+
+
+Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
+
+void setup()
+{
+  Serial.begin(115200);
+  ///while (!Serial);  // For Yun/Leo/Micro/Zero/...
+  delay(100);
+  Serial.println("\n\nKH finger detect test");
+
+  // set the data rate for the sensor serial port
+  finger.begin(57600);
+  delay(5);
+  
+  if (finger.verifyPassword()) {
+    Serial.println("Found fingerprint sensor!");
+  } else {
+    Serial.println("Did not find fingerprint sensor :(");
+    while (1) {
+      delay(1);
+    }
+  }
+
+  Serial.println(F("Reading sensor parameters"));
+  finger.getParameters();
+  Serial.print(F("Status: 0x")); Serial.println(finger.status_reg, HEX);
+  Serial.print(F("Sys ID: 0x")); Serial.println(finger.system_id, HEX);
+  Serial.print(F("Capacity: ")); Serial.println(finger.capacity);
+  Serial.print(F("Security level: ")); Serial.println(finger.security_level);
+  Serial.print(F("Device address: ")); Serial.println(finger.device_addr, HEX);
+  Serial.print(F("Packet len: ")); Serial.println(finger.packet_len);
+  Serial.print(F("Baud rate: ")); Serial.println(finger.baud_rate);
+
+  finger.getTemplateCount();
+
+  if (finger.templateCount == 0) {
+    Serial.print("Sensor doesn't contain any fingerprint data. Please run the 'enroll' example.");
+  }
+  else {
+    Serial.println("Waiting for valid finger...");
+    Serial.print("Sensor contains "); Serial.print(finger.templateCount); Serial.println(" templates");
+  }
+
+  Serial.println();
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+    //WiFi.begin(ssid, password);
+  }
+
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
+}
+
+void loop()                     // run over and over again
+{
+  getFingerprintID();
+  delay(50);            //don't need to run this at full speed.
+}
+
+uint8_t getFingerprintID() {
+  uint8_t p = finger.getImage();
+  switch (p) {
+    case FINGERPRINT_OK:
+      Serial.println("ImageT");
+      break;
+    case FINGERPRINT_NOFINGER:
+      Serial.println("NoFD");
+      return p;
+    case FINGERPRINT_PACKETRECIEVEERR:
+      Serial.println("Communication error");
+      return p;
+    case FINGERPRINT_IMAGEFAIL:
+      Serial.println("Imaging error");
+      return p;
+    default:
+      Serial.println("Unknown error");
+      return p;
+  }
+
+  // OK success!
+
+  p = finger.image2Tz();
+  switch (p) {
+    case FINGERPRINT_OK:
+      Serial.println("ImageC");
+      break;
+    case FINGERPRINT_IMAGEMESS:
+      Serial.println("Image too messy");
+      return p;
+    case FINGERPRINT_PACKETRECIEVEERR:
+      Serial.println("Communication error");
+      return p;
+    case FINGERPRINT_FEATUREFAIL:
+      Serial.println("Could not find fingerprint features");
+      return p;
+    case FINGERPRINT_INVALIDIMAGE:
+      Serial.println("Could not find fingerprint features");
+      return p;
+    default:
+      Serial.println("Unknown error");
+      return p;
+  }
+
+  // OK converted!
+  p = finger.fingerSearch();
+  if (p == FINGERPRINT_OK) {
+    Serial.println("MatchFound");
+  } else if (p == FINGERPRINT_PACKETRECIEVEERR) {
+    Serial.println("Communication error");
+    return p;
+  } else if (p == FINGERPRINT_NOTFOUND) {
+    Serial.println("Did not find a match");
+    return p;
+  } else {
+    Serial.println("Unknown error");
+    return p;
+  }
+
+
+  //int id_found = finger.fingerID;
+  ///Serial.print("Found ID #"); Serial.print(id_found);
+ /// Serial.print(" with confidence of "); Serial.println(finger.confidence);
+
+  ///if (id_found % 2 == 0 ) {
+    ///id_found = id_found - 1 ;
+  ///}
+
+  //Serial.print("Found ID #"); Serial.println(id_found);
+  Serial.print("Found ID #"); Serial.println(finger.fingerID);
+  //wifi(id_found);
+  wifi(finger.fingerID);
+  //return id_found;
+  return finger.fingerID;
+}
+
+// returns -1 if failed, otherwise returns ID #
+int getFingerprintIDez() {
+  uint8_t p = finger.getImage();
+  if (p != FINGERPRINT_OK)  return -1;
+
+  p = finger.image2Tz();
+  if (p != FINGERPRINT_OK)  return -1;
+
+  p = finger.fingerFastSearch();
+  if (p != FINGERPRINT_OK)  return -1;
+
+  // found a match!
+  Serial.print("Found ID #"); Serial.print(finger.fingerID);
+  Serial.print(" with confidence of "); Serial.println(finger.confidence);
+  return finger.fingerID;
+}
+
+void wifi(int ID) {
+
+
+  Serial.print("connecting to ");
+  Serial.println(host);
+
+  // Use WiFiClient class to create TCP connections
+  WiFiClient client;
+
+  if (!client.connect(host, httpPort)) {
+    Serial.println("connection failed");
+    return;
+  }
+
+  // We now create a URI for the request
+  String url = "/";
+  url += resource;
+  url += "?id=";
+  url += String(ID);
+
+  //localhost/api.php?id=7
+
+  Serial.print("Requesting URL: ");
+  Serial.println(url);
+  Serial.println();
+
+  // This will send the request to the server
+  client.print(String("GET ") + url + " HTTP/1.1\r\n" +
+               "Host: " + host + "\r\n" +
+               "Connection: close\r\n\r\n");
+  unsigned long timeout = millis();
+  while (client.available() == 0) {
+    if (millis() - timeout > 2000) {
+      Serial.println(">>> Client Timeout !");
+      client.stop();
+      return;
+    }
+  }
+  String stat = "";
+  // Read all the lines of the reply from server and print them to Serial
+  while (client.available()) {
+    ///String line = client.readStringUntil('\r');
+     stat = client.readStringUntil('\r');
+    ///Serial.print(line);
+    ///Serial.println();
+
+  }
+    int firstClosingBracket = stat.indexOf("#@") + 2;
+    int secondClosingBracket = stat.indexOf("*+");
+    stat = stat.substring(firstClosingBracket, secondClosingBracket);
+  Serial.println(stat);
+
+  if (stat.equals("success")) {
+
+  } else if (stat.equals("error")) {
+
+  }
+
+  Serial.println();
+  Serial.println("closing connection");
+}
